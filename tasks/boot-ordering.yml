@@ -1,0 +1,102 @@
+---
+# The encrypted-storage boot chain (generic consumer): assemble the pool AFTER the
+# unlock seam, gate on health, raise the barrier. DECOUPLED from local-fs — the
+# fstab entry the backend writes is noauto, so this late, network-ordered unit
+# owns the mount and there is no local-fs -> ... -> network ordering cycle.
+#
+#   clevis-luks-unlocked.target          (from clevis_encryption — the seam)
+#     -> encrypted-storage-assemble.service  scan/activate + mount
+#     -> encrypted-storage-check.service     mounted + writable -> ok, else exit 1
+#     -> encrypted-storage-ready.target      barrier (WantedBy=multi-user.target)
+#
+# encrypted-storage-assemble Wants=/After= the seam (NOT Requires): the unlock is
+# fail-degraded; fail-closed lives in the check -> ready Requires chain.
+
+- name: "Deploy the encrypted-storage assemble script"
+  ansible.builtin.template:
+    src: encrypted-storage-assemble.sh.j2
+    dest: /usr/local/sbin/encrypted-storage-assemble
+    owner: root
+    group: root
+    mode: '0755'
+  notify: "Reload systemd daemon"
+
+- name: "Deploy encrypted-storage-assemble.service"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/encrypted-storage-assemble.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible role: encrypted_storage_pool
+      # Do not edit by hand; regenerated on each role run.
+      [Unit]
+      Description=Assemble the encrypted {{ encrypted_storage_pool_backend }} pool ({{ encrypted_storage_pool_name }})
+      Wants=clevis-luks-unlocked.target
+      After=clevis-luks-unlocked.target network-online.target
+      # Deliberately NOT Before=local-fs.target — the fstab entry is noauto so this
+      # late unit owns the mount, avoiding the ordering cycle.
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      ExecStart=/usr/local/sbin/encrypted-storage-assemble
+  notify: "Reload systemd daemon"
+
+- name: "Deploy the encrypted-storage check script"
+  ansible.builtin.template:
+    src: encrypted-storage-check.sh.j2
+    dest: /usr/local/sbin/encrypted-storage-check
+    owner: root
+    group: root
+    mode: '0755'
+  notify: "Reload systemd daemon"
+
+- name: "Deploy encrypted-storage-check.service"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/encrypted-storage-check.service
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible role: encrypted_storage_pool
+      # Do not edit by hand; regenerated on each role run.
+      [Unit]
+      Description=Verify encrypted pool {{ encrypted_storage_pool_name }} mounted + writable
+      Requires=encrypted-storage-assemble.service
+      After=encrypted-storage-assemble.service
+
+      [Service]
+      Type=oneshot
+      RemainAfterExit=yes
+      # mounted + writable -> exit 0; otherwise exit 1 so the barrier is NOT reached.
+      ExecStart=/usr/local/sbin/encrypted-storage-check
+  notify: "Reload systemd daemon"
+
+- name: "Deploy encrypted-storage-ready.target (synchronization barrier)"
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/encrypted-storage-ready.target
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      # Managed by Ansible role: encrypted_storage_pool
+      # Do not edit by hand; regenerated on each role run.
+      [Unit]
+      Description=Encrypted Storage Synchronization Barrier
+      Documentation=man:systemd.special(7)
+      Requires=encrypted-storage-check.service
+      After=encrypted-storage-check.service
+
+      [Install]
+      WantedBy=multi-user.target
+  notify: "Reload systemd daemon"
+
+- name: "Enable the encrypted-storage barrier"
+  ansible.builtin.systemd:
+    name: encrypted-storage-ready.target
+    enabled: true
+  ignore_errors: "{{ ansible_check_mode }}"
+
+- name: "Flush handlers (daemon_reload) before continuing"
+  ansible.builtin.meta: flush_handlers

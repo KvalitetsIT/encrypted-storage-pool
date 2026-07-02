@@ -1,0 +1,103 @@
+---
+# Tier-2 (VM) preparation:
+#   1. clevis-tang   : stand up the EXTERNAL Tang server on the NAT network.
+#   2. controller    : throwaway vault password + remove any stale recovery key so
+#                      clevis's provisioning block runs fresh.
+#
+# NOTE: no DKMS / kernel-module build here — btrfs-progs and lvm2 are mainline and
+# are installed by the role itself (packages.yml). That's the whole point of the
+# non-ZFS consumer: a fast, robust harness with no out-of-tree module.
+
+# ── 1. External Tang server ──────────────────────────────────────────────────
+- name: "Prepare the external Tang server"
+  hosts: clevis-tang
+  gather_facts: false
+  become: true
+  vars:
+    tang_port: 7500
+  tasks:
+    - name: "Install Tang"
+      ansible.builtin.apt:
+        name:
+          - tang
+          - curl
+        state: present
+        update_cache: true
+
+    - name: "Create tangd.socket drop-in directory"
+      ansible.builtin.file:
+        path: /etc/systemd/system/tangd.socket.d
+        state: directory
+        mode: '0755'
+
+    - name: "Bind tangd.socket to all interfaces on port {{ tang_port }}"
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/tangd.socket.d/listen.conf
+        mode: '0644'
+        content: |
+          [Socket]
+          ListenStream=
+          ListenStream=0.0.0.0:{{ tang_port }}
+
+    - name: "Generate Tang signing keys (once)"
+      # tang 15 (Debian 13) ships tangd-keygen in tang-common under /usr/libexec
+      # (off $PATH); locate it robustly.
+      ansible.builtin.shell:
+        cmd: |
+          set -eo pipefail
+          kg=$(command -v tangd-keygen 2>/dev/null || true)
+          [ -n "$kg" ] || kg=$(dpkg -L tang tang-common 2>/dev/null | grep -m1 '/tangd-keygen$' || true)
+          [ -n "$kg" ] || kg=$(find /usr/libexec /usr/lib /usr/bin -name tangd-keygen 2>/dev/null | head -n1)
+          [ -n "$kg" ] || { echo "tangd-keygen not found" >&2; exit 1; }
+          mkdir -p /var/db/tang
+          if ! ls /var/db/tang/*.jwk >/dev/null 2>&1; then
+            "$kg" /var/db/tang
+            echo CHANGED
+          fi
+        executable: /bin/bash
+      register: _tang_keygen
+      changed_when: "'CHANGED' in _tang_keygen.stdout"
+
+    - name: "Enable + (re)start tangd.socket"
+      ansible.builtin.systemd:
+        name: tangd.socket
+        enabled: true
+        state: restarted
+        daemon_reload: true
+
+    - name: "Wait for Tang to answer /adv locally"
+      ansible.builtin.uri:
+        url: "http://127.0.0.1:{{ tang_port }}/adv"
+        status_code: 200
+      register: _tang_adv
+      retries: 10
+      delay: 1
+      until: _tang_adv.status == 200
+
+# ── 2. Controller: vault password + fresh recovery-key gate ──────────────────
+- name: "Prepare the controller (vault pass + recovery-key gate)"
+  hosts: clevis-target
+  gather_facts: false
+  tasks:
+    - name: "Ensure the controller secrets directory exists"
+      ansible.builtin.file:
+        path: /tmp/molecule-esp-secrets
+        state: directory
+        mode: '0700'
+      delegate_to: localhost
+      become: false
+
+    - name: "Generate a throwaway vault password on the controller"
+      ansible.builtin.copy:
+        dest: /tmp/molecule-esp-secrets/vault-pass
+        content: "{{ lookup('ansible.builtin.password', '/dev/null', length=32) }}\n"
+        mode: '0600'
+      delegate_to: localhost
+      become: false
+
+    - name: "Remove any stale recovery key so provisioning runs fresh"
+      ansible.builtin.file:
+        path: /tmp/molecule-esp-secrets/recovery-key.txt
+        state: absent
+      delegate_to: localhost
+      become: false

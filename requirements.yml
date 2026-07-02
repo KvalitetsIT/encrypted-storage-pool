@@ -1,0 +1,16 @@
+---
+# Test-only dependency: the molecule harness composes clevis_encryption (NBDE) to
+# unlock the disks this role then assembles a pool on. The role itself has no
+# runtime role dependency — it only consumes clevis-luks-unlocked.target (a
+# systemd contract), not clevis Ansible tasks.
+roles:
+  - src: https://github.com/alc-kit/clevis-encryption-role.git
+    name: clevis_encryption
+    scm: git
+    version: v1.2.0
+
+collections:
+  - name: ansible.posix
+    version: ">=1.5.0"
+  - name: community.general
+    version: ">=5.0.0"

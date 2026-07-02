@@ -1,0 +1,32 @@
+---
+# Ensure the pool exists and is assembled/mounted now (idempotent).
+#
+# Mappers are opened by clevis_encryption's clevis-unlock-data.service — driven
+# here, not re-implemented, so Tang/curlrc concerns stay in the NBDE role. Then
+# the backend creates the filesystem (if missing) and mounts it.
+
+- name: "Ensure pool | resolve the data-disk list"
+  ansible.builtin.include_tasks: resolve-disks.yml
+
+- name: "Ensure pool | (re)assert clevis NBDE unlock so the mappers are open"
+  # clevis-unlock-data is oneshot RemainAfterExit + always exits 0 (fail-degraded);
+  # starting it is idempotent. failed_when:false so a node without the NBDE unit
+  # doesn't hard-fail — a missing pool then surfaces at verify.
+  ansible.builtin.systemd:
+    name: clevis-unlock-data.service
+    state: started
+  register: encrypted_storage_pool_unlock
+  failed_when: false
+
+- name: "Ensure pool | fail clearly if no data disks resolved"
+  ansible.builtin.fail:
+    msg: >-
+      No data disks resolved for pool '{{ encrypted_storage_pool_name }}'. Set
+      encrypted_storage_pool_devices explicitly, or ensure clevis_encryption has
+      written crypt-* entries to /etc/crypttab first.
+  when: (encrypted_storage_pool_devices_resolved | default([]) | length) == 0
+
+- name: "Ensure pool | create + assemble ({{ encrypted_storage_pool_backend }})"
+  ansible.builtin.include_tasks: "backends/{{ encrypted_storage_pool_backend }}.yml"
+  vars:
+    encrypted_storage_pool_action: create

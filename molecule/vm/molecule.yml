@@ -1,0 +1,84 @@
+---
+# Tier-2 VM test for encrypted_storage_pool on Vagrant + libvirt/KVM.
+#
+# Proves the generic (non-ZFS) consumer end to end: clevis_encryption unlocks the
+# disks at boot from an EXTERNAL Tang, and encrypted_storage_pool assembles +
+# mounts a btrfs or LVM pool across the clevis-luks-unlocked.target seam, surviving
+# a reboot. The backend is selected by $ESP_BACKEND (btrfs|lvm) so CI can matrix it.
+# Rootless via the libvirt group + qemu_use_session=false, cachier disabled.
+dependency:
+  name: galaxy
+
+driver:
+  name: vagrant
+  provider:
+    name: libvirt
+  cachier: disabled
+
+platforms:
+  - name: clevis-tang
+    box: debian/trixie64
+    memory: 1024
+    cpus: 1
+    provider_options:
+      qemu_use_session: false
+
+  - name: clevis-target
+    box: debian/trixie64
+    memory: 2048
+    cpus: 2
+    provider_options:
+      qemu_use_session: false
+    provider_raw_config_args:
+      - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vdb'"
+      - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vdc'"
+
+provisioner:
+  name: ansible
+  env:
+    # Resolve both roles from the scenario's roles/ dir: encrypted_storage_pool via
+    # the committed self-symlink, clevis_encryption installed there by CI (galaxy).
+    ANSIBLE_ROLES_PATH: "${MOLECULE_SCENARIO_DIRECTORY}/roles"
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+  inventory:
+    host_vars:
+      clevis-target:
+        tang_servers:
+          - url: "http://{{ hostvars['clevis-tang'].ansible_host }}:7500"
+        clevis_raw_disks:
+          - vdb
+          - vdc
+        clevis_curl_ip_version: auto
+        # Dedicated controller secrets dir (NOT /tmp itself — clevis chmods
+        # dirname(recovery_key_path) to 0700, which fails on /tmp).
+        clevis_recovery_key_path: /tmp/molecule-esp-secrets/recovery-key.txt
+        clevis_vault_password_file: /tmp/molecule-esp-secrets/vault-pass
+        # clevis NBDE-only — encrypted_storage_pool owns the pool + storage units.
+        clevis_ensure_pool: false
+        clevis_install_zfs_packages: false
+        clevis_deploy_storage_units: false
+        # encrypted_storage_pool — backend from $ESP_BACKEND (CI matrix), default btrfs.
+        encrypted_storage_pool_backend: "${ESP_BACKEND:-btrfs}"
+        encrypted_storage_pool_name: data
+        encrypted_storage_pool_topology: mirror
+        encrypted_storage_pool_devices:
+          - vdb
+          - vdc
+
+scenario:
+  # create -> prepare -> converge -> side_effect (REBOOT) -> verify. Idempotence
+  # omitted: one-shot provisioning + boot test, the reboot is the point.
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - side_effect
+    - verify
+    - destroy
+
+verifier:
+  name: ansible

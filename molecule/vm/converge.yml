@@ -1,0 +1,14 @@
+---
+# Converge the split stack: clevis_encryption unlocks (NBDE-only, per host_vars)
+# and encrypted_storage_pool assembles a btrfs/LVM pool across the
+# clevis-luks-unlocked.target seam. Backend selected by $ESP_BACKEND.
+#
+# Only the target is converged; the Tang VM is infrastructure, not under test.
+- name: "Converge — clevis NBDE unlock + encrypted_storage_pool"
+  hosts: clevis-target
+  become: true
+  gather_facts: true
+
+  roles:
+    - clevis_encryption
+    - encrypted_storage_pool

@@ -1,0 +1,96 @@
+---
+# Tier-2 VM test: boot the real cross-role chain on Vagrant + libvirt/KVM, for
+# BOTH backends (btrfs, lvm). Needs nested KVM, so it is gated on PRs touching the
+# role/tests + manual dispatch. GitHub-hosted ubuntu-latest exposes /dev/kvm.
+# (Follows the bootstrap proven in clevis-encryption-role/proxmox-install; cannot
+# be exercised by `act` — no nested KVM/libvirtd there.)
+name: vm-tests
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'tasks/**'
+      - 'templates/**'
+      - 'defaults/**'
+      - 'handlers/**'
+      - 'molecule/**'
+      - 'requirements.yml'
+      - '.github/workflows/vm-tests.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GIT_CONFIG_COUNT: "1"
+  GIT_CONFIG_KEY_0: init.defaultBranch
+  GIT_CONFIG_VALUE_0: main
+
+jobs:
+  molecule:
+    name: "molecule vm (${{ matrix.backend }}, libvirt/KVM)"
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        backend: [btrfs, lvm]
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Enable unprivileged access to /dev/kvm
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Install libvirt/KVM + Vagrant + vagrant-libvirt
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            qemu-kvm qemu-utils libvirt-daemon-system libvirt-clients libvirt-dev \
+            dnsmasq-base ebtables ruby-dev build-essential \
+            genisoimage wamerican
+          wget -qO- https://apt.releases.hashicorp.com/gpg \
+            | sudo gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+          echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] \
+            https://apt.releases.hashicorp.com $(lsb_release -cs) main" \
+            | sudo tee /etc/apt/sources.list.d/hashicorp.list
+          sudo apt-get update
+          sudo apt-get install -y vagrant
+          vagrant plugin install vagrant-libvirt
+
+      - name: Grant the runner rootless libvirt access
+        run: |
+          sudo systemctl enable --now libvirtd
+          sudo usermod -aG libvirt,kvm "$USER"
+          sudo setfacl -m "u:$USER:rw" /var/run/libvirt/libvirt-sock || true
+          sudo chmod 0666 /dev/kvm || true
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install Molecule (Vagrant driver) + Ansible
+        run: |
+          python -m pip install --upgrade \
+            molecule 'molecule-plugins[vagrant]' python-vagrant ansible
+          ansible-galaxy collection install ansible.posix community.general
+
+      - name: Install clevis_encryption into the scenario roles dir
+        # The molecule converge composes clevis_encryption (NBDE); install the
+        # pinned version (requirements.yml) next to the committed self-symlink so
+        # molecule's ANSIBLE_ROLES_PATH resolves both roles.
+        run: ansible-galaxy role install -r requirements.yml -p molecule/vm/roles
+
+      - name: "molecule test -s vm (backend=${{ matrix.backend }})"
+        env:
+          LIBVIRT_DEFAULT_URI: qemu:///system
+          ESP_BACKEND: ${{ matrix.backend }}
+        run: |
+          vdir="$(python -c 'import molecule_plugins.vagrant as m; print(m.__file__)')"
+          export ANSIBLE_LIBRARY="$(dirname "$vdir")/modules"
+          molecule test -s vm

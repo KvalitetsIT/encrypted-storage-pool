@@ -1,0 +1,8 @@
+---
+# Install the backend userland. Both btrfs-progs and lvm2 are mainline Debian
+# packages — no out-of-tree module, no DKMS, so this is fast and robust.
+- name: "Install the storage backend userland ({{ encrypted_storage_pool_backend }})"
+  ansible.builtin.apt:
+    name: "{{ 'btrfs-progs' if encrypted_storage_pool_backend == 'btrfs' else 'lvm2' }}"
+    state: present
+    update_cache: true

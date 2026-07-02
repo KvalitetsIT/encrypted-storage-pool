@@ -1,0 +1,33 @@
+---
+# Post-apply validator. Fails LOUDLY here rather than leaving a node that only
+# reveals a broken boot chain after a reboot.
+
+- name: "Verify | systemd-analyze the encrypted-storage boot chain"
+  ansible.builtin.command: >-
+    systemd-analyze verify
+    encrypted-storage-ready.target
+    clevis-luks-unlocked.target
+    encrypted-storage-assemble.service
+    encrypted-storage-check.service
+  register: encrypted_storage_pool_boot_verify
+  changed_when: false
+  failed_when: false
+  check_mode: false
+
+- name: "Verify | show systemd-analyze output"
+  ansible.builtin.debug:
+    var: encrypted_storage_pool_boot_verify.stderr_lines
+
+- name: "Verify | FAIL on a systemd ordering cycle in the boot chain"
+  ansible.builtin.fail:
+    msg: >-
+      systemd found an ORDERING CYCLE in the encrypted-storage boot chain — a job
+      would be deleted to break it and the pool would not assemble at boot.
+      systemd-analyze said: {{ encrypted_storage_pool_boot_verify.stderr | default('') }}
+  when: >-
+    'ordering cycle' in
+    (((encrypted_storage_pool_boot_verify.stdout | default('')) ~ (encrypted_storage_pool_boot_verify.stderr | default(''))) | lower)
+
+- name: "Verify | assert the pool is mounted at {{ encrypted_storage_pool_mountpoint }}"
+  ansible.builtin.command: "mountpoint -q {{ encrypted_storage_pool_mountpoint }}"
+  changed_when: false

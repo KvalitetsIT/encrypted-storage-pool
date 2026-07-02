@@ -1,0 +1,73 @@
+---
+# LVM backend. encrypted_storage_pool_action: create | destroy.
+# Expects encrypted_storage_pool_devices_resolved (from resolve-disks.yml).
+
+- name: "LVM | destroy the existing volume group"
+  when: encrypted_storage_pool_action | default('create') == 'destroy'
+  block:
+    - name: "LVM | unmount + drop the fstab entry"
+      ansible.posix.mount:
+        path: "{{ encrypted_storage_pool_mountpoint }}"
+        state: absent
+
+    - name: "LVM | remove the volume group (if present)"
+      ansible.builtin.command: "vgremove -f {{ encrypted_storage_pool_name }}"
+      register: encrypted_storage_pool_vgremove
+      changed_when: encrypted_storage_pool_vgremove.rc == 0
+      failed_when: false
+
+    - name: "LVM | wipe PV/filesystem signatures from the crypt-* members"
+      ansible.builtin.command: "wipefs -a /dev/mapper/crypt-{{ item }}"
+      loop: "{{ encrypted_storage_pool_devices_resolved }}"
+      changed_when: true
+      loop_control:
+        label: "crypt-{{ item }}"
+
+- name: "LVM | create + mount"
+  when: encrypted_storage_pool_action | default('create') == 'create'
+  block:
+    - name: "LVM | check whether the volume group exists"
+      ansible.builtin.command: "vgs {{ encrypted_storage_pool_name }}"
+      register: encrypted_storage_pool_vg_exists
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: "LVM | create PVs + VG + LV + filesystem"
+      when: encrypted_storage_pool_vg_exists.rc != 0
+      block:
+        - name: "LVM | pvcreate the crypt-* members"
+          ansible.builtin.command: "pvcreate -f /dev/mapper/crypt-{{ item }}"
+          loop: "{{ encrypted_storage_pool_devices_resolved }}"
+          changed_when: true
+          loop_control:
+            label: "crypt-{{ item }}"
+
+        - name: "LVM | vgcreate {{ encrypted_storage_pool_name }}"
+          ansible.builtin.command: >-
+            vgcreate {{ encrypted_storage_pool_name }}
+            {{ encrypted_storage_pool_devices_resolved | map('regex_replace', '^', '/dev/mapper/crypt-') | join(' ') }}
+          changed_when: true
+
+        - name: "LVM | lvcreate the data LV ({{ encrypted_storage_pool_topology }})"
+          # mirror -> raid1 (-m1, one redundant copy); stripe -> striped across all PVs.
+          ansible.builtin.command: >-
+            lvcreate -y -n data -l 100%FREE
+            {{ '--type raid1 -m1' if encrypted_storage_pool_topology == 'mirror'
+               else '--type striped -i ' ~ (encrypted_storage_pool_devices_resolved | length) }}
+            {{ encrypted_storage_pool_name }}
+          changed_when: true
+
+        - name: "LVM | mkfs.ext4 on the LV"
+          ansible.builtin.command: >-
+            mkfs.ext4 -F -L {{ encrypted_storage_pool_name }}
+            /dev/{{ encrypted_storage_pool_name }}/data
+          changed_when: true
+
+    - name: "LVM | mount now + record a noauto,_netdev fstab entry"
+      ansible.posix.mount:
+        path: "{{ encrypted_storage_pool_mountpoint }}"
+        src: "/dev/{{ encrypted_storage_pool_name }}/data"
+        fstype: ext4
+        opts: "noauto,_netdev,x-systemd.after=network-online.target"
+        state: mounted

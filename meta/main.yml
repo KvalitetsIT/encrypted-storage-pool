@@ -1,0 +1,28 @@
+---
+galaxy_info:
+  role_name: encrypted_storage_pool
+  author: kvalitetsit
+  description: >
+    Generic storage-pool consumer for LUKS devices unlocked by clevis_encryption.
+    Assembles a btrfs or LVM pool on the crypt-* mappers, consumes
+    clevis-luks-unlocked.target, and emits encrypted-storage-ready.target — the
+    filesystem-agnostic (non-ZFS) counterpart of proxmox-install's
+    proxmox_encrypted_storage role.
+  license: MIT
+  min_ansible_version: "2.14"
+  platforms:
+    - name: Debian
+      versions:
+        - bookworm
+        - trixie
+  galaxy_tags:
+    - luks
+    - clevis
+    - encryption
+    - storage
+    - btrfs
+    - lvm
+
+# No hard dependencies — composable. Intended to run AFTER clevis_encryption
+# (which unlocks the mappers and publishes clevis-luks-unlocked.target).
+dependencies: []

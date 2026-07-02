@@ -1,0 +1,11 @@
+# clevis_encryption is installed into the molecule scenario's roles dir at test
+# time (galaxy git); source of truth is its own repo.
+molecule/*/roles/clevis_encryption/
+
+# Molecule ephemeral state
+.molecule/
+*.retry
+__pycache__/
+
+# ansible-lint / galaxy local cache
+.ansible/

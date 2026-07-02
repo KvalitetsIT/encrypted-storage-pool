@@ -1,0 +1,51 @@
+---
+# btrfs backend. encrypted_storage_pool_action: create | destroy.
+# Expects encrypted_storage_pool_devices_resolved (from resolve-disks.yml).
+
+- name: "Btrfs | destroy the existing filesystem"
+  when: encrypted_storage_pool_action | default('create') == 'destroy'
+  block:
+    - name: "Btrfs | unmount + drop the fstab entry"
+      ansible.posix.mount:
+        path: "{{ encrypted_storage_pool_mountpoint }}"
+        state: absent
+
+    - name: "Btrfs | wipe filesystem signatures from the crypt-* members"
+      ansible.builtin.command: "wipefs -a /dev/mapper/crypt-{{ item }}"
+      loop: "{{ encrypted_storage_pool_devices_resolved }}"
+      changed_when: true
+      loop_control:
+        label: "crypt-{{ item }}"
+
+- name: "Btrfs | create + mount"
+  when: encrypted_storage_pool_action | default('create') == 'create'
+  block:
+    - name: "Btrfs | check for an existing filesystem (LABEL {{ encrypted_storage_pool_name }})"
+      ansible.builtin.command: "blkid -t LABEL={{ encrypted_storage_pool_name }} -o device"
+      register: encrypted_storage_pool_btrfs_exists
+      changed_when: false
+      failed_when: false
+      check_mode: false
+
+    - name: "Btrfs | mkfs.btrfs across the crypt-* members"
+      # mirror -> raid1 (data+metadata); stripe -> single profile.
+      ansible.builtin.command: >-
+        mkfs.btrfs -f -L {{ encrypted_storage_pool_name }}
+        {{ '-d raid1 -m raid1' if encrypted_storage_pool_topology == 'mirror' else '-d single -m single' }}
+        {{ encrypted_storage_pool_devices_resolved | map('regex_replace', '^', '/dev/mapper/crypt-') | join(' ') }}
+      when: encrypted_storage_pool_btrfs_exists.rc != 0
+      changed_when: true
+
+    - name: "Btrfs | scan devices so a multi-device mount succeeds"
+      ansible.builtin.command: btrfs device scan
+      changed_when: false
+
+    - name: "Btrfs | mount now + record a noauto,_netdev fstab entry"
+      # noauto: the boot mount is done by encrypted-storage-assemble.service AFTER
+      # the unlock seam, not early by local-fs (which would form the ordering cycle).
+      ansible.posix.mount:
+        path: "{{ encrypted_storage_pool_mountpoint }}"
+        src: "LABEL={{ encrypted_storage_pool_name }}"
+        fstype: btrfs
+        opts: "noauto,_netdev,x-systemd.after=network-online.target"
+        state: mounted

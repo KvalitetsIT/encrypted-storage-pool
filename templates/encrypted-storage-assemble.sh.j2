@@ -1,0 +1,43 @@
+#!/bin/bash
+# Managed by Ansible role: encrypted_storage_pool
+# Do not edit by hand; regenerated on each role run.
+#
+# Assemble + mount the encrypted {{ encrypted_storage_pool_backend }} pool from the
+# decrypted LUKS mappers, LATE in boot (after clevis-unlock-data opened them and
+# clevis-luks-unlocked.target was reached). The fstab entry is noauto, so this is
+# the only thing that mounts it — keeping it out of the early local-fs chain avoids
+# the ordering cycle. Best-effort: encrypted-storage-check is the viability gate.
+set -uo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+mnt="{{ encrypted_storage_pool_mountpoint }}"
+mkdir -p "$mnt"
+
+if mountpoint -q "$mnt"; then
+  echo "assemble: $mnt already mounted"
+  exit 0
+fi
+
+{% if encrypted_storage_pool_backend == 'btrfs' %}
+# btrfs: register all members, then mount (fstab provides LABEL + opts).
+btrfs device scan >/dev/null 2>&1 || true
+if mount "$mnt" 2>/dev/null; then
+  echo "assemble: mounted $mnt (btrfs)"
+  exit 0
+fi
+# A member's mapper may not have unlocked — try degraded so a raid1 still comes up.
+if mount -o degraded "$mnt" 2>/dev/null; then
+  echo "assemble: mounted $mnt (btrfs, DEGRADED)"
+  exit 0
+fi
+{% else %}
+# lvm: activate the volume group, then mount (fstab provides the LV path + opts).
+vgchange -ay "{{ encrypted_storage_pool_name }}" >/dev/null 2>&1 || true
+if mount "$mnt" 2>/dev/null; then
+  echo "assemble: mounted $mnt (lvm)"
+  exit 0
+fi
+{% endif %}
+
+echo "assemble: FAILED to mount $mnt (insufficient members decrypted?)" >&2
+exit 0

@@ -1,0 +1,23 @@
+---
+# The heart of the Tier-2 test: REBOOT so the boot chain runs for real. Only after
+# a reboot do the disks get unlocked at boot from the EXTERNAL Tang,
+# clevis-luks-unlocked.target be reached, and the assemble -> check -> ready chain
+# fire. verify.yml asserts the post-reboot state.
+- name: "Reboot the encrypted host to exercise the real boot chain"
+  hosts: clevis-target
+  become: true
+  gather_facts: false
+
+  tasks:
+    - name: "Reboot and wait for SSH to return"
+      ansible.builtin.reboot:
+        reboot_timeout: 600
+
+    - name: "Wait for the boot chain to settle (encrypted-storage-ready.target)"  # noqa: command-instead-of-module
+      ansible.builtin.command: systemctl is-active encrypted-storage-ready.target
+      register: _esp_ready
+      until: _esp_ready.stdout == "active"
+      retries: 40
+      delay: 5
+      changed_when: false
+      failed_when: false

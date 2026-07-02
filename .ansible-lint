@@ -1,0 +1,6 @@
+---
+# Production profile. The molecule scenario's self-referential role symlink is
+# excluded to avoid an ELOOP during ansible-lint's file walk.
+profile: production
+exclude_paths:
+  - molecule/*/roles/

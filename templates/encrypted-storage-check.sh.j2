@@ -1,0 +1,26 @@
+#!/bin/bash
+# Managed by Ansible role: encrypted_storage_pool
+# Do not edit by hand; regenerated on each role run.
+#
+# Viability gate for encrypted-storage-ready.target. Exit 0 if the pool is mounted
+# and writable; exit 1 otherwise so the barrier is NOT reached and consumers that
+# gate on it stay stopped for manual recovery.
+set -uo pipefail
+export PATH=/usr/sbin:/usr/bin:/sbin:/bin
+
+mnt="{{ encrypted_storage_pool_mountpoint }}"
+
+if ! mountpoint -q "$mnt"; then
+  echo "check: $mnt is not mounted"
+  exit 1
+fi
+
+probe="$mnt/.esp-health"
+if echo esp-ok > "$probe" 2>/dev/null && [ "$(cat "$probe" 2>/dev/null)" = esp-ok ]; then
+  rm -f "$probe" 2>/dev/null || true
+  echo "check: $mnt mounted + writable"
+  exit 0
+fi
+
+echo "check: $mnt mounted but NOT writable" >&2
+exit 1

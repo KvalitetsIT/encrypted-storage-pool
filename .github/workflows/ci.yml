@@ -1,0 +1,48 @@
+---
+# Tier-0 repository validation: yamllint + ansible-lint (production). Fast, no VMs.
+# The libvirt/KVM boot test lives in vm-tests.yml.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    name: validate (yamllint + ansible-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install lint tooling
+        run: python -m pip install --upgrade ansible-lint yamllint
+
+      - name: Install collections
+        run: ansible-galaxy collection install ansible.posix community.general
+
+      - name: Stub clevis_encryption for lint
+        # The molecule converge composes clevis_encryption; its source of truth is
+        # its own repo (installed for real by vm-tests). A stub lets ansible-lint
+        # resolve the role reference here without a network clone. The scenario
+        # roles dir is excluded from linting (.ansible-lint / .yamllint).
+        run: |
+          mkdir -p molecule/vm/roles/clevis_encryption/tasks
+          printf -- '---\n' > molecule/vm/roles/clevis_encryption/tasks/main.yml
+
+      - name: yamllint
+        run: yamllint .
+
+      - name: ansible-lint
+        env:
+          ANSIBLE_ROLES_PATH: molecule/vm/roles
+        run: ansible-lint

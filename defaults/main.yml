@@ -1,0 +1,36 @@
+---
+# ── encrypted_storage_pool defaults ─────────────────────────────────────────
+# A generic storage-pool consumer for LUKS mappers unlocked by clevis_encryption.
+# Assembles a btrfs or LVM pool on the crypt-* devices, consumes
+# clevis-luks-unlocked.target, and emits encrypted-storage-ready.target.
+
+# Master switch — set false to make the role a no-op.
+encrypted_storage_pool_enabled: true
+
+# Storage backend: btrfs | lvm. Both are mainline — no DKMS.
+encrypted_storage_pool_backend: btrfs
+
+# Pool identity: btrfs filesystem LABEL / LVM volume-group name.
+encrypted_storage_pool_name: data
+
+# Redundancy: mirror | stripe.
+#   btrfs → mirror = raid1 (data+metadata); stripe = single profile.
+#   lvm   → mirror = --type raid1 -m1; stripe = --type striped.
+encrypted_storage_pool_topology: mirror
+
+# Where the assembled filesystem is mounted (fstab noauto + a boot unit mounts it
+# after the unlock seam — NOT early via local-fs, to avoid the ordering cycle).
+encrypted_storage_pool_mountpoint: "/srv/{{ encrypted_storage_pool_name }}"
+
+# Data disks (bare names, e.g. [vdb, vdc]) whose crypt-<disk> mappers form the
+# pool. Leave unset to derive from the crypt-* entries in /etc/crypttab.
+# encrypted_storage_pool_devices: []
+
+# Create/assemble the pool on every run (idempotent).
+encrypted_storage_pool_ensure: true
+
+# Install the backend userland (btrfs-progs / lvm2).
+encrypted_storage_pool_install_packages: true
+
+# DESTRUCTIVE: destroy an existing pool before (re-)creating.
+encrypted_storage_pool_destroy_existing: false

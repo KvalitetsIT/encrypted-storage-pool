@@ -1,0 +1,24 @@
+---
+# Resolve the data disks (bare names, e.g. vdb) whose crypt-<disk> mappers form
+# the pool, into encrypted_storage_pool_devices_resolved. Explicit override wins;
+# otherwise derive from the crypt-* entries clevis_encryption wrote to /etc/crypttab.
+- name: "Resolve disks | use the explicit list if provided"
+  ansible.builtin.set_fact:
+    encrypted_storage_pool_devices_resolved: "{{ encrypted_storage_pool_devices }}"
+  when: encrypted_storage_pool_devices is defined
+
+- name: "Resolve disks | derive from /etc/crypttab crypt-* entries"
+  when: encrypted_storage_pool_devices is not defined
+  block:
+    - name: "Resolve disks | read crypt-* mapper names from /etc/crypttab"
+      ansible.builtin.shell:
+        cmd: |
+          awk '$1 ~ /^crypt-/ {sub(/^crypt-/, "", $1); print $1}' /etc/crypttab 2>/dev/null || true
+        executable: /bin/bash
+      register: encrypted_storage_pool_crypttab
+      changed_when: false
+      check_mode: false
+
+    - name: "Resolve disks | set encrypted_storage_pool_devices_resolved from crypttab"
+      ansible.builtin.set_fact:
+        encrypted_storage_pool_devices_resolved: "{{ encrypted_storage_pool_crypttab.stdout_lines | default([]) }}"

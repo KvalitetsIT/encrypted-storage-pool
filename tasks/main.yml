@@ -1,0 +1,54 @@
+---
+# Entry point for encrypted_storage_pool.
+#
+# Assembles a btrfs or LVM pool on the LUKS mappers that clevis_encryption
+# unlocks. Consumes clevis-luks-unlocked.target (the NBDE seam) and emits
+# encrypted-storage-ready.target (the barrier consumers gate on).
+#
+# Tags: storage (all), prestage (packages), systemd (boot units), pool
+# (create/assemble + destroy), verify (post-apply validation).
+
+- name: "Skip: encrypted_storage_pool_enabled is false"
+  ansible.builtin.debug:
+    msg: "encrypted_storage_pool skipped on {{ inventory_hostname }}"
+  when: not (encrypted_storage_pool_enabled | default(true) | bool)
+
+- name: "Apply encrypted_storage_pool ({{ encrypted_storage_pool_backend }})"
+  when: encrypted_storage_pool_enabled | default(true) | bool
+  block:
+
+    - name: "Validate the backend selection"
+      ansible.builtin.assert:
+        that: encrypted_storage_pool_backend in ['btrfs', 'lvm']
+        fail_msg: >-
+          encrypted_storage_pool_backend must be 'btrfs' or 'lvm'
+          (got '{{ encrypted_storage_pool_backend }}').
+        quiet: true
+
+    - name: "Install backend packages"
+      ansible.builtin.include_tasks: packages.yml
+      when: encrypted_storage_pool_install_packages | default(true) | bool
+      tags: [storage, prestage]
+
+    - name: "Deploy the encrypted-storage boot-ordering chain"
+      ansible.builtin.include_tasks: boot-ordering.yml
+      tags: [storage, systemd]
+
+    - name: "Destroy existing pool (encrypted_storage_pool_destroy_existing=true)"
+      ansible.builtin.include_tasks: "backends/{{ encrypted_storage_pool_backend }}.yml"
+      vars:
+        encrypted_storage_pool_action: destroy
+      when: encrypted_storage_pool_destroy_existing | default(false) | bool
+      tags: [storage, pool]
+
+    - name: "Ensure the pool exists + is assembled"
+      ansible.builtin.include_tasks: create-pool.yml
+      when: encrypted_storage_pool_ensure | default(true) | bool
+      tags: [storage, pool]
+
+    - name: "Verify the boot ordering + live pool"
+      ansible.builtin.include_tasks: verify.yml
+      when:
+        - encrypted_storage_pool_ensure | default(true) | bool
+        - not ansible_check_mode
+      tags: [storage, pool, verify]
