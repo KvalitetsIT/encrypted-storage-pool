@@ -1,0 +1,65 @@
+---
+# Stand up the LEGACY starting state: two LUKS2 disks opened as node-named
+# mappers (crypt-vdb / crypt-vdc), a btrfs raid1 pool across them, mounted, with
+# a sentinel file. No clevis role — this is the pre-migration state we will
+# live-rename in converge.
+- name: "Prepare: LUKS + btrfs on legacy crypt-<node> mappers, mounted"
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    mnt: /srv/data
+    keyfile: /root/rename-test.key
+    disks: [vdb, vdc]
+  tasks:
+    - name: "Install cryptsetup + btrfs tooling"
+      ansible.builtin.apt:
+        name: [cryptsetup, btrfs-progs, util-linux]
+        state: present
+        update_cache: true
+
+    - name: "Write a LUKS key file"
+      ansible.builtin.copy:
+        dest: "{{ keyfile }}"
+        content: "rename-test-key"
+        mode: '0600'
+
+    - name: "LUKS2-format each disk (fast pbkdf for tests)"
+      ansible.builtin.command: >-
+        cryptsetup luksFormat --type luks2 --batch-mode
+        --pbkdf pbkdf2 --pbkdf-force-iterations 1000
+        /dev/{{ item }} {{ keyfile }}
+      loop: "{{ disks }}"
+      changed_when: true
+
+    - name: "Open each disk as the LEGACY node-named mapper crypt-<node>"
+      ansible.builtin.command: >-
+        cryptsetup luksOpen --key-file {{ keyfile }} /dev/{{ item }} crypt-{{ item }}
+      loop: "{{ disks }}"
+      changed_when: true
+
+    - name: "Create the mountpoint"
+      ansible.builtin.file:
+        path: "{{ mnt }}"
+        state: directory
+        mode: '0755'
+
+    - name: "Create the btrfs raid1 mirror across the two mappers (LABEL=data)"
+      ansible.builtin.command: >-
+        mkfs.btrfs -f -L data -d raid1 -m raid1
+        /dev/mapper/crypt-vdb /dev/mapper/crypt-vdc
+      changed_when: true
+
+    - name: "Scan so the multi-device btrfs is assemblable"
+      ansible.builtin.command: btrfs device scan
+      changed_when: false
+
+    - name: "Mount the pool"  # noqa: command-instead-of-module
+      ansible.builtin.command: "mount /dev/mapper/crypt-vdb {{ mnt }}"
+      changed_when: true
+
+    - name: "Write a sentinel to prove data survives the rename"
+      ansible.builtin.copy:
+        dest: "{{ mnt }}/sentinel"
+        content: "rename-sentinel"
+        mode: '0644'

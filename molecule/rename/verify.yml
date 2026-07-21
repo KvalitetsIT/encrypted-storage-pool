@@ -1,0 +1,73 @@
+---
+# Prove the live rename was non-disruptive AND that the pool reassembles by
+# fs-UUID under the new crypt-<uuid> names.
+- name: "Verify dmsetup rename: non-disruptive + reassembles by fs-UUID"
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    mnt: /srv/data
+    disks: [vdb, vdc]
+  tasks:
+    - name: "Resolve the new crypt-<uuid> names"
+      ansible.builtin.command: "cryptsetup luksUUID /dev/{{ item }}"
+      loop: "{{ disks }}"
+      register: _uuids
+      changed_when: false
+
+    - name: "Legacy node-named mappers are gone"
+      ansible.builtin.command: "test ! -e /dev/mapper/crypt-{{ item }}"
+      loop: "{{ disks }}"
+      changed_when: false
+
+    - name: "New crypt-<uuid> mappers exist"
+      ansible.builtin.command: "test -e /dev/mapper/crypt-{{ item.stdout }}"
+      loop: "{{ _uuids.results }}"
+      loop_control:
+        label: "crypt-{{ item.stdout }}"
+      changed_when: false
+
+    - name: "Pool still mounted + sentinel intact (rename was non-disruptive)"
+      ansible.builtin.command: "cat {{ mnt }}/sentinel"
+      register: _sent
+      changed_when: false
+      failed_when: _sent.stdout != "rename-sentinel"
+
+    - name: "Confirm btrfs sees both devices under the new crypt-<uuid> names"
+      ansible.builtin.command: "btrfs filesystem show {{ mnt }}"
+      register: _bfs
+      changed_when: false
+      failed_when: >-
+        ('crypt-' ~ _uuids.results[0].stdout) not in _bfs.stdout or
+        ('crypt-' ~ _uuids.results[1].stdout) not in _bfs.stdout
+
+    - name: "Write I/O after the rename still works"
+      ansible.builtin.command: "dd if=/dev/zero of={{ mnt }}/postrename bs=1M count=8 oflag=direct"
+      changed_when: true
+
+    # ── Reassembly-by-fs-UUID proof: unmount -> scan -> remount by LABEL ───────
+    - name: "Unmount the pool"  # noqa: command-instead-of-module
+      ansible.builtin.command: "umount {{ mnt }}"
+      changed_when: true
+
+    - name: "Scan btrfs devices (re-discovers members by fs-UUID at their NEW paths)"
+      ansible.builtin.command: btrfs device scan
+      changed_when: false
+
+    - name: "Remount by LABEL — proves reassembly by fs-UUID under crypt-<uuid>"  # noqa: command-instead-of-module
+      ansible.builtin.command: "mount LABEL=data {{ mnt }}"
+      changed_when: true
+
+    - name: "Sentinel STILL intact after unmount/scan/remount under new names"
+      ansible.builtin.command: "cat {{ mnt }}/sentinel"
+      register: _sent2
+      changed_when: false
+      failed_when: _sent2.stdout != "rename-sentinel"
+
+    - name: "PASS"
+      ansible.builtin.debug:
+        msg: >-
+          dmsetup rename VALIDATED (btrfs): live rename crypt-<node> -> crypt-<uuid>
+          under a mounted pool was non-disruptive (sentinel + I/O intact), and the
+          pool reassembles by fs-UUID under the new names (unmount -> scan ->
+          mount LABEL=data). btrfs proving ground for the crypt-<uuid> migration.

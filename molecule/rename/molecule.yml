@@ -1,0 +1,50 @@
+---
+# Validation: a LIVE `dmsetup rename` of a LUKS mapper underneath a MOUNTED btrfs
+# pool is non-disruptive, and the pool reassembles by fs-UUID under the new name.
+# This is the btrfs proving ground for the crypt-<node> -> crypt-<uuid> migration
+# (the ZFS consumer mirrors the *structure* but needs its own ZFS-specific
+# assertions — cached vdev path, ZED, cachefile).
+#
+# Deliberately self-contained: prepare sets up LUKS + btrfs directly (NO clevis
+# role), so this exercises only the rename mechanism, independent of which
+# clevis_encryption version is installed.
+dependency:
+  name: galaxy
+
+driver:
+  name: vagrant
+  provider:
+    name: libvirt
+  cachier: disabled
+
+platforms:
+  - name: rename-target
+    box: debian/trixie64
+    memory: 1024
+    cpus: 1
+    provider_options:
+      qemu_use_session: false
+    provider_raw_config_args:
+      - "storage :file, :size => '1G', :type => 'qcow2', :bus => 'virtio', :device => 'vdb'"
+      - "storage :file, :size => '1G', :type => 'qcow2', :bus => 'virtio', :device => 'vdc'"
+
+provisioner:
+  name: ansible
+  config_options:
+    defaults:
+      interpreter_python: auto_silent
+
+scenario:
+  # create -> prepare (LUKS+btrfs on crypt-<node>) -> converge (live rename) ->
+  # verify (non-disruptive + reassembly by fs-UUID) -> destroy.
+  test_sequence:
+    - destroy
+    - syntax
+    - create
+    - prepare
+    - converge
+    - verify
+    - destroy
+
+verifier:
+  name: ansible

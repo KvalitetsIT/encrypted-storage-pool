@@ -2,7 +2,20 @@
 # Resolve the data disks (bare names, e.g. vdb) whose crypt-<disk> mappers form
 # the pool, into encrypted_storage_pool_devices_resolved. Explicit override wins;
 # otherwise derive from the crypt-* entries clevis_encryption wrote to /etc/crypttab.
-- name: "Resolve disks | use the explicit list if provided"
+# DEPRECATED: the explicit device list. Which disks are encrypted is a decision
+# for inventory / the clevis_encryption (NBDE) layer, not this consumer; the
+# supported path is to derive members from the crypt-<uuid> entries clevis writes
+# to /etc/crypttab. A bare-node explicit list (e.g. [vdb]) is also WRONG under the
+# persistent crypt-<LUKS-UUID> naming (the mapper is crypt-<uuid>, not crypt-vdb).
+- name: "Resolve disks | WARN that the explicit device list is deprecated"
+  ansible.builtin.debug:
+    msg: >-
+      encrypted_storage_pool_devices is DEPRECATED — members are derived from the
+      crypt-* entries in /etc/crypttab. Unset it. If kept, entries MUST be full
+      mapper names (crypt-<uuid>), never bare device nodes.
+  when: encrypted_storage_pool_devices is defined
+
+- name: "Resolve disks | use the explicit list if provided (deprecated)"
   ansible.builtin.set_fact:
     encrypted_storage_pool_devices_resolved: "{{ encrypted_storage_pool_devices }}"
   when: encrypted_storage_pool_devices is defined

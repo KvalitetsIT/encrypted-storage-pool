@@ -1,0 +1,37 @@
+---
+# The migration step: rename each LUKS mapper crypt-<node> -> crypt-<uuid> LIVE,
+# while the btrfs pool is mounted and serving. `dmsetup rename` is a metadata-only
+# operation on the dm device — the kernel bdev (major:minor) is unchanged, so
+# anything holding it open (the mounted btrfs) keeps working uninterrupted.
+- name: "Live-rename crypt-<node> -> crypt-<uuid> under the mounted pool"
+  hosts: all
+  become: true
+  gather_facts: false
+  vars:
+    mnt: /srv/data
+    disks: [vdb, vdc]
+  tasks:
+    - name: "Pool is mounted BEFORE the rename"
+      ansible.builtin.command: "mountpoint -q {{ mnt }}"
+      changed_when: false
+
+    - name: "Read each disk's LUKS UUID (the persistent mapper name)"
+      ansible.builtin.command: "cryptsetup luksUUID /dev/{{ item }}"
+      loop: "{{ disks }}"
+      register: _uuids
+      changed_when: false
+
+    - name: "Rename each mapper crypt-<node> -> crypt-<uuid> (live, pool mounted)"
+      ansible.builtin.command: "dmsetup rename crypt-{{ item.item }} crypt-{{ item.stdout }}"
+      loop: "{{ _uuids.results }}"
+      loop_control:
+        label: "crypt-{{ item.item }} -> crypt-{{ item.stdout }}"
+      changed_when: true
+
+    - name: "Settle udev so the /dev/mapper symlinks are updated"
+      ansible.builtin.command: udevadm settle
+      changed_when: false
+
+    - name: "Pool is STILL mounted immediately after the rename"
+      ansible.builtin.command: "mountpoint -q {{ mnt }}"
+      changed_when: false
