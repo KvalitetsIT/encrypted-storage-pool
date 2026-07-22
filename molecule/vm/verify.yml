@@ -9,6 +9,7 @@
   gather_facts: false
   vars:
     esp_mnt: "/srv/{{ encrypted_storage_pool_name | default('data') }}"
+    esp_expected: /var/lib/esp-integrity.expected.sha256
 
   tasks:
     - name: "Assert encrypted-storage-ready.target reached (the boot barrier)"  # noqa: command-instead-of-module
@@ -80,12 +81,21 @@
           Seam ordering OK: unlock-data({{ _u }}) <= unlocked.target({{ _t }})
           <= assemble({{ _a }}) µs.
 
-    - name: "Assert both data mappers are open after boot"
-      ansible.builtin.command: "cryptsetup status crypt-{{ item }}"
-      loop: [vdb, vdc]
+    - name: "Resolve the data mappers' persistent names (crypt-<uuid>)"
+      ansible.builtin.command: "cryptsetup luksUUID /dev/{{ item }}"
+      loop: [vdb, vdc, vdd, vde]
+      register: _data_uuids
+      changed_when: false
+
+    - name: "Assert every data mapper is open under its persistent crypt-<uuid> name"
+      # item.stdout is the LUKS UUID; the mapper MUST be crypt-<uuid> (persistent
+      # naming, clevis >=v2.0.0), never the legacy crypt-<node>. A missing mapper
+      # here means the crypt-<uuid> naming contract regressed.
+      ansible.builtin.command: "cryptsetup status crypt-{{ item.stdout }}"
+      loop: "{{ _data_uuids.results }}"
       changed_when: false
       loop_control:
-        label: "crypt-{{ item }}"
+        label: "crypt-{{ item.stdout }}"
 
     - name: "Assert the pool is mounted at {{ esp_mnt }}"
       ansible.builtin.command: "mountpoint -q {{ esp_mnt }}"
@@ -99,6 +109,15 @@
           test "$(cat "$f")" = esp-verified
           rm -f "$f"
         executable: /bin/bash
+      changed_when: false
+
+    - name: "Data integrity | ASSERT the payload written before reboot survived reboot + unlock"
+      # sha256sum -c recomputes the on-pool payload and checks it against the digest
+      # recorded on the (unencrypted) root fs BEFORE the reboot. Non-zero exit means
+      # the data did NOT survive the reboot/unlock byte-for-bit (or the pool/file is
+      # missing). This is the regression guard for the data-loss bug.
+      ansible.builtin.command: "sha256sum -c {{ esp_expected }}"
+      register: _esp_integrity
       changed_when: false
 
     - name: "PASS"
