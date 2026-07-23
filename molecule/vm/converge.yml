@@ -8,7 +8,35 @@
   hosts: clevis-target
   become: true
   gather_facts: true
+  vars:
+    esp_mnt: "/srv/{{ encrypted_storage_pool_name | default('data') }}"
+    esp_payload: "{{ esp_mnt }}/esp-integrity.bin"
+    esp_expected: /var/lib/esp-integrity.expected.sha256
 
   roles:
     - clevis_encryption
     - encrypted_storage_pool
+
+  # Once the pool is assembled + mounted (pre-reboot), seed a known payload and
+  # record its digest OUTSIDE the pool. side_effect.yml then reboots and verify.yml
+  # reads it back — proving the data survived both the reboot AND the LUKS unlock.
+  post_tasks:
+    - name: "Data integrity | assert the pool is mounted before seeding data"
+      ansible.builtin.command: "mountpoint -q {{ esp_mnt }}"
+      changed_when: false
+
+    - name: "Data integrity | write a known 16 MiB random payload to the pool (pre-reboot)"
+      ansible.builtin.command: "dd if=/dev/urandom of={{ esp_payload }} bs=1M count=16"
+      changed_when: true
+
+    - name: "Data integrity | record the payload sha256 on the root fs (outside the pool) + flush"
+      # The digest lives on the unencrypted root fs so the post-reboot check is
+      # independent of the pool: a pool that returns empty/corrupt is detected, not
+      # masked. sync forces the payload out of cache to disk before the reboot.
+      ansible.builtin.shell:
+        cmd: |
+          set -euo pipefail
+          sha256sum "{{ esp_payload }}" > "{{ esp_expected }}"
+          sync
+        executable: /bin/bash
+      changed_when: true

@@ -32,6 +32,8 @@ platforms:
     provider_raw_config_args:
       - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vdb'"
       - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vdc'"
+      - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vdd'"
+      - "storage :file, :size => '2G', :type => 'qcow2', :bus => 'virtio', :device => 'vde'"
 
 provisioner:
   name: ansible
@@ -42,6 +44,8 @@ provisioner:
   config_options:
     defaults:
       interpreter_python: auto_silent
+    ssh_connection:
+      ssh_args: "-o AddKeysToAgent=no"
   inventory:
     host_vars:
       clevis-target:
@@ -50,6 +54,8 @@ provisioner:
         clevis_raw_disks:
           - vdb
           - vdc
+          - vdd
+          - vde
         clevis_curl_ip_version: auto
         # Dedicated controller secrets dir (NOT /tmp itself — clevis chmods
         # dirname(recovery_key_path) to 0700, which fails on /tmp).
@@ -63,9 +69,11 @@ provisioner:
         encrypted_storage_pool_backend: "${ESP_BACKEND:-btrfs}"
         encrypted_storage_pool_name: data
         encrypted_storage_pool_topology: mirror
-        encrypted_storage_pool_devices:
-          - vdb
-          - vdc
+        # encrypted_storage_pool_devices is intentionally UNSET: pool members are
+        # derived from the crypt-<uuid> entries clevis_encryption (>=v2.0.0) writes
+        # to /etc/crypttab. This exercises the supported persistent-naming path; an
+        # explicit bare-node list (e.g. [vdb]) is deprecated and WRONG under
+        # crypt-<LUKS-UUID> naming (the mapper is crypt-<uuid>, not crypt-vdb).
 
 scenario:
   # create -> prepare -> converge -> side_effect (REBOOT) -> verify. Idempotence

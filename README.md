@@ -1,7 +1,7 @@
 # encrypted_storage_pool
 
 A generic storage-pool consumer for LUKS devices unlocked by
-[`clevis_encryption`](https://github.com/alc-kit/clevis-encryption-role). It
+[`clevis_encryption`](https://github.com/KvalitetsIT/clevis-encryption-role). It
 assembles a **btrfs** or **LVM** pool on the `crypt-*` mappers, consumes
 `clevis-luks-unlocked.target`, and emits `encrypted-storage-ready.target`.
 
