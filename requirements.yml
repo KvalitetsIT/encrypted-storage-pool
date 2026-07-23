@@ -4,7 +4,7 @@
 # runtime role dependency — it only consumes clevis-luks-unlocked.target (a
 # systemd contract), not clevis Ansible tasks.
 roles:
-  - src: https://github.com/alc-kit/clevis-encryption-role.git
+  - src: https://github.com/KvalitetsIT/clevis-encryption-role.git
     name: clevis_encryption
     scm: git
     version: v2.0.2
